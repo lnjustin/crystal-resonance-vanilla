@@ -23,6 +23,7 @@ import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.util.datafix.DataFixTypes;
 import net.minecraft.world.InteractionResult;
+import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.ChunkPos;
@@ -86,26 +87,33 @@ public class CrystalResonance implements ModInitializer {
 					mode = Mode.OWNER_ONLY;
 				} else {
 					return InteractionResult.PASS;
-				}
+					}
 
-				state.linkNodes(selected, pos, mode, player.getUUID());
-				serverWorld.sendParticles(toolConfig.linkParticle(), pos.getX() + 0.5, pos.getY() + 1.0, pos.getZ() + 0.5, 1, 0.0, 0.05, 0.0, 0.0);
-				selected.clear();
-				return InteractionResult.SUCCESS;
-			}
+					state.linkNodes(selected, pos, mode, player.getUUID());
+					consumeTool(player, stack);
+					player.displayClientMessage(Component.literal("Linked " + selected.size() + " node(s) to lever."), true);
+					serverWorld.sendParticles(toolConfig.linkParticle(), pos.getX() + 0.5, pos.getY() + 1.0, pos.getZ() + 0.5, 1, 0.0, 0.05, 0.0, 0.0);
+					selected.clear();
+					return InteractionResult.SUCCESS;
+				}
 
 			if (toolConfig.matchesSelectTool(stack) || toolConfig.matchesLinkTool(stack)) {
 				state.getOrCreateNode(pos, player.getUUID());
 				pendingNodeSelection.get(player.getUUID()).add(pos);
+				consumeTool(player, stack);
 				serverWorld.sendParticles(toolConfig.selectParticle(), pos.getX() + 0.5, pos.getY() + 1.2, pos.getZ() + 0.5, 1, 0.0, 0.05, 0.0, 0.0);
 				return InteractionResult.SUCCESS;
 			}
 
-			if (toolConfig.matchesUnlinkTool(stack)) {
-				state.unlink(pos, player.getUUID());
-				serverWorld.sendParticles(toolConfig.unlinkParticle(), pos.getX() + 0.5, pos.getY() + 1.0, pos.getZ() + 0.5, 1, 0.0, 0.02, 0.0, 0.0);
-				return InteractionResult.SUCCESS;
-			}
+				if (toolConfig.matchesUnlinkTool(stack)) {
+					boolean unlinked = state.unlink(pos, player.getUUID());
+					if (unlinked) {
+						consumeTool(player, stack);
+					}
+					player.displayClientMessage(Component.literal(unlinked ? "Node unlinked." : "Nothing to unlink."), true);
+					serverWorld.sendParticles(toolConfig.unlinkParticle(), pos.getX() + 0.5, pos.getY() + 1.0, pos.getZ() + 0.5, 1, 0.0, 0.02, 0.0, 0.0);
+					return InteractionResult.SUCCESS;
+				}
 
 			return InteractionResult.PASS;
 		});
@@ -199,6 +207,12 @@ public class CrystalResonance implements ModInitializer {
 			case CEILING -> leverPos.above();
 			case WALL -> leverPos.relative(facing.getOpposite());
 		};
+	}
+
+	private static void consumeTool(Player player, ItemStack stack) {
+		if (!player.isCreative()) {
+			stack.shrink(1);
+		}
 	}
 }
 
@@ -521,12 +535,12 @@ class NodeState extends SavedData {
 		setDirty();
 	}
 
-	public void unlink(BlockPos nodePos, UUID player) {
+	public boolean unlink(BlockPos nodePos, UUID player) {
 		Node node = nodes.get(nodePos);
-		if (node == null) return;
+		if (node == null) return false;
 
 		if (node.mode() == Mode.OWNER_ONLY && (node.owner() == null || !node.owner().equals(player))) {
-			return;
+			return false;
 		}
 
 		if (node.leverPos() != null) {
@@ -544,6 +558,7 @@ class NodeState extends SavedData {
 		nodes.put(nodePos, new Node(node.pos(), node.owner(), null, null, false));
 		setDirty();
 		CrystalResonance.LOGGER.info("Node {} unlinked by {}", nodePos, player);
+		return true;
 	}
 
 	public boolean matchesNodeTrigger(ServerPlayer player, BlockPos nodePos) {
