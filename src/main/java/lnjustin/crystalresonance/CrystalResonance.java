@@ -58,7 +58,7 @@ import java.util.UUID;
 public class CrystalResonance implements ModInitializer {
 	static final Logger LOGGER = LoggerFactory.getLogger("crystal-resonance");
 	private static final int CHUNKS_PER_TICK = 4;
-	private static final Map<UUID, Set<BlockPos>> pendingNodeSelection = new HashMap<>();
+	private static final Map<UUID, Map<BlockPos, String>> pendingNodeSelection = new HashMap<>();
 	private static ToolConfig toolConfig = ToolConfig.defaults();
 	private static int tickCounter = 0;
 
@@ -112,10 +112,10 @@ public class CrystalResonance implements ModInitializer {
 			NodeState state = NodeState.get(serverWorld);
 			BlockState blockState = serverWorld.getBlockState(pos);
 
-			pendingNodeSelection.putIfAbsent(player.getUUID(), new HashSet<>());
+			pendingNodeSelection.putIfAbsent(player.getUUID(), new HashMap<>());
 
 			if (blockState.getBlock() instanceof LeverBlock) {
-				Set<BlockPos> selected = pendingNodeSelection.get(player.getUUID());
+				Map<BlockPos, String> selected = pendingNodeSelection.get(player.getUUID());
 				if (selected == null || selected.isEmpty()) {
 					return InteractionResult.PASS;
 				}
@@ -129,7 +129,7 @@ public class CrystalResonance implements ModInitializer {
 					return InteractionResult.PASS;
 				}
 
-				LinkAttempt attempt = state.linkNodes(selected, pos, mode, player.getUUID(), stack, serverWorld, toolConfig);
+				LinkAttempt attempt = state.linkNodes(selected.keySet(), pos, mode, player.getUUID(), stack, serverWorld, toolConfig);
 				selected.clear();
 
 				if (attempt.linkedCount() <= 0) {
@@ -160,15 +160,23 @@ public class CrystalResonance implements ModInitializer {
 				}
 
 				state.getOrCreateNode(pos, player.getUUID());
-				pendingNodeSelection.get(player.getUUID()).add(pos);
+				String selectToolId = BuiltInRegistries.ITEM.getKey(stack.getItem()).toString();
+				pendingNodeSelection.get(player.getUUID()).put(pos, selectToolId);
 				consumeTool(player, stack);
 				serverWorld.sendParticles(toolConfig.selectParticle(), pos.getX() + 0.5, pos.getY() + 1.2, pos.getZ() + 0.5, 1, 0.0, 0.05, 0.0, 0.0);
 				return InteractionResult.SUCCESS;
 			}
 
 			if (toolConfig.matchesUnlinkTool(stack)) {
-				Set<BlockPos> selected = pendingNodeSelection.get(player.getUUID());
-				if (selected != null && selected.remove(pos)) {
+				Map<BlockPos, String> selected = pendingNodeSelection.get(player.getUUID());
+				if (selected != null && selected.containsKey(pos)) {
+					String selectToolId = selected.remove(pos);
+					ItemStack refundStack = createSelectRefundStack(selectToolId, 1);
+					if (!refundStack.isEmpty()) {
+						if (!player.getInventory().add(refundStack)) {
+							player.drop(refundStack, false);
+						}
+					}
 					player.displayClientMessage(Component.literal("Selection removed."), true);
 					serverWorld.sendParticles(toolConfig.unlinkParticle(), pos.getX() + 0.5, pos.getY() + 1.2, pos.getZ() + 0.5, 1, 0.0, 0.02, 0.0, 0.0);
 					return InteractionResult.SUCCESS;
@@ -272,8 +280,8 @@ public class CrystalResonance implements ModInitializer {
 				}
 			}
 
-			for (Set<BlockPos> selected : pendingNodeSelection.values()) {
-				for (BlockPos pos : selected) {
+			for (Map<BlockPos, String> selected : pendingNodeSelection.values()) {
+				for (BlockPos pos : selected.keySet()) {
 					if (!world.hasChunkAt(pos)) {
 						continue;
 					}
@@ -408,6 +416,24 @@ public class CrystalResonance implements ModInitializer {
 		if (!player.getInventory().add(refundStack)) {
 			player.drop(refundStack, false);
 		}
+	}
+
+	private static ItemStack createSelectRefundStack(String toolId, int count) {
+		if (toolId == null) {
+			return ItemStack.EMPTY;
+		}
+
+		Identifier identifier = Identifier.tryParse(toolId);
+		if (identifier == null) {
+			return ItemStack.EMPTY;
+		}
+
+		Item item = BuiltInRegistries.ITEM.getOptional(identifier).orElse(null);
+		if (item == null) {
+			return ItemStack.EMPTY;
+		}
+
+		return new ItemStack(item, count);
 	}
 
 	private static void sendVisibilityHighlight(ServerLevel world, ServerPlayer player, BlockPos pos, ParticleOptions particle) {
